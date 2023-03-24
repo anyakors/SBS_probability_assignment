@@ -1,0 +1,5 @@
+temp/
+*.zip
+out_*
+data/*_more
+.DS_*
