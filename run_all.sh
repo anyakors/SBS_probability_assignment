@@ -13,6 +13,8 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
 		--chrom_lengths data/hg19.genome \
 		--glob \
 		--hg ../../hg19.fa \
+		--hgver hg19 \
+		--cosmicver 3.3 \
 		--activities data/valid_pcawg_published_activities_BRCA.txt \
 		--out out_proba_CTCF_mcf7_global
 

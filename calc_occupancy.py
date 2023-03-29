@@ -50,7 +50,11 @@ def check_argv():
     parser.add_argument("--out", help="output folder name")
     parser.add_argument("--local", action="store_true")
     parser.add_argument("--hg", help="path to reference genome .fa")
-    parser.add_argument("--activities", help="file with COSMIC activities for given samples")
+    parser.add_argument("--hgver", help="hg version, either hg19 or hg38")
+    parser.add_argument("--cosmicver", help="COSMIC version, either 3.3, 3.0 or 2.0")
+    parser.add_argument(
+        "--activities", help="file with COSMIC activities for given samples"
+    )
     parser.add_argument("--glob", action="store_true")
     parser.add_argument("--chrom_lengths", help="chromosome length file")
 
@@ -66,13 +70,19 @@ print(
 if not os.path.exists(args.out):
     os.makedirs(args.out)
 
-if not os.path.exists('temp'):
-    os.makedirs('temp')
+if not os.path.exists("temp"):
+    os.makedirs("temp")
 
-df = pd.read_csv("data/pcawg_published_reference.txt", sep="\t")
-activities = pd.read_csv(
-    args.activities, sep="\t", header=0, index_col=0
-)
+dict_hgver = {"hg19": "GRCh37", "hg38": "GRCh38"}
+
+if args.cosmicver == "3.3":
+    df = pd.read_csv(f"data/COSMIC_v3.3.1_SBS_{dict_hgver[args.hgver]}.txt", sep="\t")
+elif args.cosmicver == "3.0":
+    df = pd.read_csv(f"data/COSMIC_v3_SBS_{dict_hgver[args.hgver]}.txt", sep="\t")
+elif args.cosmicver == "2.0":
+    df = pd.read_csv(f"data/COSMIC_v2_SBS_{dict_hgver[args.hgver]}.txt", sep="\t")
+
+activities = pd.read_csv(args.activities, sep="\t", header=0, index_col=0)
 
 sbs_active = activities.mean(axis=0)[activities.mean(axis=0) != 0].index
 
@@ -125,18 +135,18 @@ df["Type1"] = [
         s.split("[")[0] + s.split("[")[1][0] + s.split("]")[-1],
         s.split("[")[0] + s.split("]")[0][-1] + s.split("]")[-1],
     )
-    for s in df["MutationType"]
+    for s in df["Type"]
 ]
 
 df.set_index("Type1", inplace=True)
-df.drop("MutationType", axis=1, inplace=True)
+df.drop("Type", axis=1, inplace=True)
 S = df.sum(axis=1)
 
 df_ = df.div(S, axis=0)
 
 rev_dict = {"A": "T", "T": "A", "C": "G", "G": "C"}
 
-# dictionary to store hg19 sequences
+# dictionary to store hg sequences
 seq_dict = {}
 
 print("Importing the genome...")
@@ -202,7 +212,7 @@ if args.glob:
         [
             f"{bedtools_exec}/subtractBed",
             "-a",
-            f"data/hg19.bed",
+            f"data/{args.hgver}.bed",
             "-b",
             "temp/feature_padded.bed",
         ],
@@ -232,7 +242,6 @@ sbs_interest = [
 ]  #
 
 for sample in tqdm(samples_):
-
     dict_residuals = {}
     dict_residuals_cont = {}
     st = time.time()
@@ -330,7 +339,7 @@ for sample in tqdm(samples_):
     enh_int_cont["length"] = enh_int_cont[2] - enh_int_cont[1]
 
     for col in sbs_active:
-        #print(f"Processing {col}...")
+        # print(f"Processing {col}...")
         enh_int[f"weight_{col}"] = [
             float(df_.loc[[mut_name]][col]) for mut_name in enh_int["mut_name"]
         ]
