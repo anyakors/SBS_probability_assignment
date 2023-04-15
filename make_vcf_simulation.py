@@ -36,6 +36,11 @@ plt.rcParams["xtick.color"] = COLOR
 plt.rcParams["ytick.color"] = COLOR
 
 
+def rev_compl_str(s):
+    s_ = "".join([rev_dict[l] for l in s])[::-1]
+    return s_
+
+
 def rev_compl_mut(mut_tuple):
     ini, mut = mut_tuple
     ini_ = "".join([rev_dict[l] for l in ini])[::-1]
@@ -48,7 +53,6 @@ def check_argv():
     parser.add_argument("--input", help="input folder with .vcf files")
     parser.add_argument("--feature", help=".bed feature file path")
     parser.add_argument("--out", help="output folder name")
-    parser.add_argument("--local", action="store_true")
     parser.add_argument("--hg", help="path to reference genome .fa")
     parser.add_argument("--hgver", help="hg version, either hg19 or hg38")
     parser.add_argument(
@@ -57,8 +61,9 @@ def check_argv():
     parser.add_argument(
         "--activities", help="file with COSMIC activities for given samples"
     )
-    parser.add_argument("--glob", action="store_true")
+    parser.add_argument("--perm", help="number of permutations")
     parser.add_argument("--chrom_lengths", help="chromosome length file")
+    parser.add_argument("--temp_folder", help="temporary folder name")
 
     return parser.parse_args()
 
@@ -72,10 +77,12 @@ print(
 if not os.path.exists(args.out):
     os.makedirs(args.out)
 
-if not os.path.exists("temp"):
-    os.makedirs("temp")
+if not os.path.exists(args.temp_folder):
+    os.makedirs(args.temp_folder)
 
 dict_hgver = {"hg19": "GRCh37", "hg38": "GRCh38"}
+
+sbs_interest = "SBS5"
 
 if args.cosmicver == "3.3":
     df = pd.read_csv(f"data/COSMIC_v3.3.1_SBS_{dict_hgver[args.hgver]}.txt", sep="\t")
@@ -87,6 +94,11 @@ elif args.cosmicver == "PCAWG":
     df = pd.read_csv(f"data/pcawg_published_reference.txt", sep="\t")
 
 activities = pd.read_csv(args.activities, sep="\t", header=0, index_col=0)
+
+if "cancer" in list(activities.columns):
+    activities.drop(["cancer"], axis=1, inplace=True)
+
+activities = activities.divide(activities.sum(axis=1).values, axis="rows")
 
 sbs_active = activities.mean(axis=0)[activities.mean(axis=0) != 0].index
 
@@ -183,68 +195,6 @@ enh_["length"] = enh[2] - enh[1]
 
 feature_coords = {i: [x, y] for i, x, y in zip(enh_[3], enh_[1], enh_[2])}
 
-enh_["newstart"] = enh_[1]
-enh_["newend"] = enh_[2]
-enh_["id"] = [f"id{i}" for i in range(len(enh_))]
-enh_pad = enh[[0, "newstart", "newend", "id"]]
-enh_pad.to_csv("temp/feature_padded.bed", sep="\t", index=None, header=None)
-
-if args.local:
-    print("Calculating local enrichment")
-    newpad = 1 * int(enh_["length"].mean())
-    enh_cont1 = enh.copy(deep=True)
-    enh_cont2 = enh.copy(deep=True)
-    enh_cont1["newstart"] = [int(x) - newpad for x in enh_cont1[1]]
-    enh_cont1["newstart"] = enh_cont1["newstart"].clip(lower=0)
-    enh_cont1["newend"] = [int(x) for x in enh_cont1[1]]
-    enh_cont2["newstart"] = [int(x) for x in enh_cont2[2]]
-    enh_cont2["newend"] = [int(x) + newpad for x in enh_cont2[2]]
-    enh_cont1["id"] = [f"id{i}" for i in range(len(enh_cont1))]
-    enh_cont2["id"] = [f"id{i+len(enh_cont1)}" for i in range(len(enh_cont2))]
-    enh_pad_cont = pd.concat(
-        [
-            enh_cont1[[0, "newstart", "newend", "id"]],
-            enh_cont2[[0, "newstart", "newend", "id"]],
-        ]
-    )
-    enh_pad_cont.to_csv("temp/feature_context.bed", sep="\t", index=None, header=None)
-
-if args.glob:
-    print("Calculating global enrichment")
-    f = open(f"temp/feature_context.bed", "w")
-    subprocess.call(
-        [
-            f"{bedtools_exec}/subtractBed",
-            "-a",
-            f"data/{args.hgver}.bed",
-            "-b",
-            "temp/feature_padded.bed",
-        ],
-        stdout=f,
-    )
-
-
-df_tri_freq = pd.read_csv("data/trinucleotide_freq.csv", index_col=0, header=0)
-dict_tri_odds = dict(zip(df_tri_freq["trinucl"], df_tri_freq["odds"]))
-
-sbs_interest = [
-    "SBS4",
-    "SBS6",
-    "SBS12",
-    "SBS14",
-    "SBS15",
-    "SBS16",
-    "SBS19",
-    "SBS21",
-    "SBS22",
-    "SBS26",
-    "SBS29",
-    "SBS31",
-    "SBS35",
-    "SBS44",
-    "SBS53",
-]  #
-
 for sample in tqdm(samples_):
     dict_residuals = {}
     dict_residuals_cont = {}
@@ -252,24 +202,45 @@ for sample in tqdm(samples_):
 
     sample_list_clean.append(sample)
 
-    mut1 = pd.read_csv(
+    mut0 = pd.read_csv(
         os.path.join(args.input, sample),
         sep="\t",
         comment="#",
         header=None,
         low_memory=False,
     )
+    mut1 = mut0.copy(deep=True)
     mut1["chr"] = ["chr" + str(x) for x in mut1[0]]
     mut1["start"] = [x - 1 for x in mut1[1]]
     mut1["end"] = mut1[1]
 
     mut_numbers = []
+    mut_types = []
+    mut_contexts = []
+    part_of_sbs_interest = []
     strands = []
 
-    mut1["context"] = [
-        seq_dict[c][s - 2 : s + 1].upper() for c, s in zip(mut1["chr"], mut1[1])
-    ]
-    mut1["type"] = [(c, c[0] + s + c[-1]) for c, s in zip(mut1["context"], mut1[4])]
+    for c, s, r in zip(mut1["chr"], mut1[1], mut1[3]):
+        if seq_dict[c][s - 1].upper() == r:
+            strands.append("+")
+        elif rev_dict[seq_dict[c][s - 1].upper()] == r:
+            strands.append("-")
+        else:
+            strands.append(np.nan)
+
+    mut1["strand"] = strands
+
+    for c, ss, st, r, a in zip(mut1["chr"], mut1["strand"], mut1[1], mut1[3], mut1[4]):
+        context = seq_dict[c][st - 2 : st + 1].upper()
+        ty = (context, context[0] + a + context[-1])
+        if ss == "-":
+            context = rev_compl_str(context)
+            ty = rev_compl_mut(ty)
+        mut_contexts.append(context)
+        mut_types.append(ty)
+
+    mut1["context"] = mut_contexts
+    mut1["type"] = mut_types
 
     mut_numbers = []
     strands = []
@@ -277,114 +248,30 @@ for sample in tqdm(samples_):
     for name in mut1["type"]:
         if name in dict_mut.keys():
             mut_numbers.append(dict_mut[name])
-            strands.append("+")
         elif rev_compl_mut(name) in dict_mut.keys():
             mut_numbers.append(dict_mut[rev_compl_mut(name)])
-            strands.append("-")
         else:
             mut_numbers.append(None)
-            strands.append("+")
 
     mut1["number"] = mut_numbers
-    mut1["strand"] = strands
+    # print(df_[sbs_interest])
 
-    mut2 = mut1[["chr", "start", "end", "number", "strand"]]
-    mut2.to_csv(
-        os.path.join("temp", sample.split(".")[0] + ".bed"),
+    for mut_number in mut1["number"]:
+        mut_name = dict_mut_inv[mut_number]
+        # print(mut_name)
+        if float(df_.loc[[mut_name]][sbs_interest]) > 0.03:
+            part_of_sbs_interest.append(True)
+        else:
+            part_of_sbs_interest.append(False)
+
+    mut1["SBS_interest"] = part_of_sbs_interest
+
+    mut1_ = mut0[mut1["SBS_interest"] == True]
+    mut1_.to_csv(
+        os.path.join(args.out, sample.split(".")[0] + ".vcf"),
         sep="\t",
         index=None,
         header=None,
-    )
-
-    all_mut = pd.read_csv(
-        os.path.join("temp", sample.split(".")[0] + ".bed"),
-        sep="\t",
-        header=None,
-    )
-
-    f = open(f"temp/feature_vcf_intersect.bed", "w")
-    subprocess.call(
-        [
-            f"{bedtools_exec}/intersectBed",
-            "-b",
-            f"temp/{sample.split('.')[0]}.bed",
-            "-a",
-            "temp/feature_padded.bed",
-            "-wa",
-            "-wb",
-        ],
-        stdout=f,
-    )
-
-    f = open(f"temp/context_vcf_intersect.bed", "w")
-    subprocess.call(
-        [
-            f"{bedtools_exec}/intersectBed",
-            "-b",
-            f"temp/{sample.split('.')[0]}.bed",
-            "-a",
-            "temp/feature_context.bed",
-            "-wa",
-            "-wb",
-        ],
-        stdout=f,
-    )
-
-    try:
-        enh_int = pd.read_csv("temp/feature_vcf_intersect.bed", sep="\t", header=None)
-        enh_int_cont = pd.read_csv(
-            "temp/context_vcf_intersect.bed", sep="\t", header=None
-        )
-    except pandas.errors.EmptyDataError:
-        continue
-
-    enh_int["mut_name"] = [dict_mut_inv[mut_number] for mut_number in enh_int[7]]
-    enh_int_cont["mut_name"] = [
-        dict_mut_inv[mut_number] for mut_number in enh_int_cont[6]
-    ]
-    enh_int["length"] = enh_int[2] - enh_int[1]
-    enh_int_cont["length"] = enh_int_cont[2] - enh_int_cont[1]
-
-    for col in sbs_active:
-        # print(f"Processing {col}...")
-        enh_int[f"weight_{col}"] = [
-            float(df_.loc[[mut_name]][col]) for mut_name in enh_int["mut_name"]
-        ]
-        enh_int_cont[f"weight_{col}"] = [
-            float(df_.loc[[mut_name]][col]) for mut_name in enh_int_cont["mut_name"]
-        ]
-        residuals = []
-        residuals_cont = []
-        activity = activities.loc[sample.split(".")[0]][col]
-        tot_length = enh_int_cont["length"].sum()
-        R_fid_cont = enh_int_cont[f"weight_{col}"].sum() * activity / tot_length
-        for fid in enh_["id"].unique():
-            enh_int_fid = enh_int[enh_int[3] == fid]
-            if len(enh_int_fid) > 0:
-                length = int(enh_int_fid.iloc[0]["length"])
-                R_fid = enh_int_fid[f"weight_{col}"].sum() * activity / length
-            else:
-                length = 1
-                R_fid = 0
-
-            residuals.append(R_fid)
-            residuals_cont.append(R_fid_cont)
-
-        dict_residuals[f"{col}"] = residuals
-        dict_residuals_cont[f"{col}"] = residuals_cont
-
-    df_residuals = pd.DataFrame(dict_residuals)
-    df_residuals_sp = scipy.sparse.csr_matrix(df_residuals.values)
-    scipy.sparse.save_npz(
-        os.path.join(args.out, f"{sample.split('.')[0]}_probas.csv"),
-        df_residuals_sp,
-    )
-
-    df_residuals_cont = pd.DataFrame(dict_residuals_cont)
-    df_residuals_cont_sp = scipy.sparse.csr_matrix(df_residuals_cont.values)
-    scipy.sparse.save_npz(
-        os.path.join(args.out, f"{sample.split('.')[0]}_probas_cont.csv"),
-        df_residuals_cont_sp,
     )
 
 et = time.time()

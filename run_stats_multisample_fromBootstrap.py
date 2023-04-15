@@ -49,6 +49,10 @@ print(f"Running tests for mutational occupancy...")
 
 activities = pd.read_csv(args.activities, sep="\t", header=0, index_col=0)
 
+if "cancer" in list(activities.columns):
+    activities.drop(["cancer"], axis=1, inplace=True)
+
+activities = activities.divide(activities.sum(axis=1).values, axis="rows")
 newindex = activities.mean(axis=0)[activities.mean(axis=0) != 0].index
 
 print(activities.mean(axis=0)[activities.mean(axis=0) != 0])
@@ -58,42 +62,51 @@ print(activities.mean(axis=0)[activities.mean(axis=0) != 0])
 folder = args.folder
 dirs = os.listdir(folder)
 
-df_2 = {}
+fc_b = []
+act_b = []
+sbs_b = []
 
 for f in dirs:
-    if "probas_cont.csv.npz" in f:
-        sample = f.split("_")[0]
-        sample_no = f.split("_")[1]
-        s = f"{sample}_{sample_no}"
-        # cancer = f.split('_')[1]
-        npz = scipy.sparse.load_npz(os.path.join(folder, f))
-        mean_context = np.sum(npz.toarray(), axis=0)
+    if "bootstrap.csv" in f:
+        sample_name = f[:-18]
+        df_temp = pd.read_csv(os.path.join(folder, f), header=0, index_col=0)
+        df_temp = df_temp.dropna(axis=0)
+        print(sample_name)
+        if sample_name in list(activities.index):
+            for i in df_temp.index:
+                fc_b.append(float(df_temp.loc[i]["FC"]))
+                sbs_b.append(i)
+                act_b.append(
+                    activities.loc[sample_name][i] / activities.loc[sample_name].sum()
+                )
 
-        for f2 in dirs:
-            sample1 = f2.split("_")[0]
-            sample1_no = f2.split("_")[1]
-            s1 = f"{sample1}_{sample1_no}"
-            if "probas.csv.npz" in f2 and s1 == s:
-                npz2 = scipy.sparse.load_npz(os.path.join(folder, f2))
-                mean_feat = np.sum(npz2.toarray(), axis=0)
+df_b = pd.DataFrame(
+    {
+        "SBS": sbs_b,
+        "FC": fc_b,
+        "Activities": act_b,
+        "FC_weighted": [x * y for x, y in zip(fc_b, act_b)],
+    }
+)
+# df_b.to_csv(os.path.join(folder, f"all_SBS_allsamples_FC_b.csv"))
 
-        if len(mean_feat) == len(newindex) and len(mean_context) == len(newindex):
-            df_2[s] = mean_feat / mean_context
-
-df_2 = pd.DataFrame(df_2).T
-df_2.columns = newindex
+print(df_b)
 
 fcs = []
-for c in df_2.columns:
-    fcs.append(df_2[(df_2[c] != np.inf) & (df_2[c] != np.nan)][c].mean())
-df_plot = pd.DataFrame({"signature": df_2.columns, "FC": fcs})
+for c in newindex:
+    fcs.append(
+        np.sum(df_b[df_b["SBS"] == c]["FC_weighted"])
+        / np.sum(df_b[df_b["SBS"] == c]["Activities"])
+    )
+df_plot = pd.DataFrame({"signature": newindex, "FC": fcs})
 df_plot.set_index("signature", inplace=True)
 
 ss = []
 pp = []
 
-for c in df_2.columns:
-    test = np.log2(df_2[df_2[c] != np.inf][c].dropna().values)
+for c in newindex:
+    # test = np.log2(df_2[df_2[c] != np.inf][c].dropna().values)
+    test = np.log2(df_b[df_b["SBS"] == c]["FC"].dropna().values)
     control = np.array([np.log2(1)] * len(test))
     # res = stats.ttest_rel(control, test)
     if len(test) > 1:
@@ -106,7 +119,6 @@ for c in df_2.columns:
 
 df_p = pd.DataFrame({"MW-U": ss, "p": pp})
 df_p["SBS"] = newindex
-df_p.set_index("SBS").to_csv(os.path.join(folder, f"all_SBS_intersample.csv"))
 
 p_cutoff = args.p_cutoff
 
@@ -118,12 +130,24 @@ for i in range(len(df_plot.index)):
     ):
         df_plot.iloc[i]["FC"] = np.nan
 
+df_p["FC"] = df_plot["FC"]
+df_p.set_index("SBS").to_csv(
+    os.path.join(folder, f"all_SBS_intersample_bootstrap_weighted.csv")
+)
+
+plt.cla()
+plt.clf()
 fig, (ax1, ax2) = plt.subplots(1, 2, gridspec_kw={"width_ratios": [3, 1]})
 
+df_b["FC"] = [np.log2(x) if not np.isnan(x) else np.nan for x in df_b["FC"]]
+
 ax1 = sns.boxplot(
-    df_2,
+    data=df_b,
+    order=newindex,
+    y="SBS",
+    x="FC",
     whis=[5, 95],
-    orient="h",
+    # orient="h",
     fliersize=1,
     notch=True,
     showcaps=False,
@@ -133,12 +157,7 @@ ax1 = sns.boxplot(
     ax=ax1,
 )
 
-ax1.axvline(
-    x=1, ymin=0, ymax=len(df_2.columns), lw=1.5, ls="--", color="red", zorder=-10
-)
-
-if ax1.get_xlim()[1] > 20:
-    ax1.set_xlim(ax1.get_xlim()[0], 20)
+ax1.set_xlabel(r"FC")
 
 ax2 = sns.heatmap(
     df_plot,
@@ -152,5 +171,31 @@ ax2 = sns.heatmap(
 
 plt.ylabel("")
 ax2.set_yticklabels("")
+ax2.set_yticks(ax1.get_yticks() + 0.5)
 
-plt.savefig(os.path.join(folder, f"FC_heatmap.pdf"), format="pdf", bbox_inches="tight")
+ax1.axvline(
+    x=0,
+    ymin=0,
+    ymax=len(df_b["SBS"].unique()),
+    lw=1.5,
+    ls="--",
+    color="red",
+    zorder=-10,
+)
+
+print(ax1.get_xlim())
+if ax1.get_xlim()[1] > 10 or ax1.get_xlim()[0] < -10:
+    ax1.set_xlim(-10, 10)
+
+xticks = ax1.get_xticks()
+ax1.set_xticklabels([r"2$^{{{x}}}$".format(x=int(x)) for x in xticks])
+ax2.set_xticklabels("")
+ax2.set_xticks([])
+
+plt.tight_layout(w_pad=-0.2)
+
+plt.savefig(
+    os.path.join(folder, f"FC_heatmap_fromBootstrap_weighted.pdf"),
+    format="pdf",
+    bbox_inches="tight",
+)

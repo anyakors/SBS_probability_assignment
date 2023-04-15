@@ -36,6 +36,11 @@ plt.rcParams["xtick.color"] = COLOR
 plt.rcParams["ytick.color"] = COLOR
 
 
+def rev_compl_str(s):
+    s_ = "".join([rev_dict[l] for l in s])[::-1]
+    return s_
+
+
 def rev_compl_mut(mut_tuple):
     ini, mut = mut_tuple
     ini_ = "".join([rev_dict[l] for l in ini])[::-1]
@@ -264,31 +269,45 @@ for sample in tqdm(samples_):
     mut1["end"] = mut1[1]
 
     mut_numbers = []
+    mut_types = []
+    mut_contexts = []
     strands = []
 
-    mut1["context"] = [
-        seq_dict[c][s - 2 : s + 1].upper() for c, s in zip(mut1["chr"], mut1[1])
-    ]
-    mut1["type"] = [(c, c[0] + s + c[-1]) for c, s in zip(mut1["context"], mut1[4])]
+    for c, s, r in zip(mut1["chr"], mut1[1], mut1[3]):
+        if seq_dict[c][s - 1].upper() == r:
+            strands.append("+")
+        elif rev_dict[seq_dict[c][s - 1].upper()] == r:
+            strands.append("-")
+        else:
+            strands.append(np.nan)
 
+    mut1["strand"] = strands
+
+    for c, ss, st, r, a in zip(mut1["chr"], mut1["strand"], mut1[1], mut1[3], mut1[4]):
+        context = seq_dict[c][st - 2 : st + 1].upper()
+        ty = (context, context[0] + a + context[-1])
+        if ss == "-":
+            context = rev_compl_str(context)
+            ty = rev_compl_mut(ty)
+        mut_contexts.append(context)
+        mut_types.append(ty)
+
+    mut1["context"] = mut_contexts
+    mut1["type"] = mut_types
     mut_numbers = []
     strands = []
 
     for name in mut1["type"]:
         if name in dict_mut.keys():
             mut_numbers.append(dict_mut[name])
-            strands.append("+")
         elif rev_compl_mut(name) in dict_mut.keys():
             mut_numbers.append(dict_mut[rev_compl_mut(name)])
-            strands.append("-")
         else:
             mut_numbers.append(None)
-            strands.append("+")
 
     mut1["number"] = mut_numbers
-    mut1["strand"] = strands
 
-    mut2 = mut1[["chr", "start", "end", "number", "strand"]]
+    mut2 = mut1[["chr", "start", "end", "number", "strand"]].dropna()
     mut2.to_csv(
         os.path.join("temp", sample.split(".")[0] + ".bed"),
         sep="\t",
@@ -358,11 +377,16 @@ for sample in tqdm(samples_):
         activity = activities.loc[sample.split(".")[0]][col]
         tot_length = enh_int_cont["length"].sum()
         R_fid_cont = enh_int_cont[f"weight_{col}"].sum() * activity / tot_length
+        collated_feature_bed = {"chr": [], "start": [], "end": [], "activity": []}
         for fid in enh_["id"].unique():
             enh_int_fid = enh_int[enh_int[3] == fid]
             if len(enh_int_fid) > 0:
+                collated_feature_bed["chr"].append(enh_int_fid.iloc[0][0])
+                collated_feature_bed["start"].append(enh_int_fid.iloc[0][1])
+                collated_feature_bed["end"].append(enh_int_fid.iloc[0][2])
                 length = int(enh_int_fid.iloc[0]["length"])
                 R_fid = enh_int_fid[f"weight_{col}"].sum() * activity / length
+                collated_feature_bed["activity"].append(R_fid)
             else:
                 length = 1
                 R_fid = 0
@@ -372,8 +396,15 @@ for sample in tqdm(samples_):
 
         dict_residuals[f"{col}"] = residuals
         dict_residuals_cont[f"{col}"] = residuals_cont
+        collated_feature_bed = pd.DataFrame(collated_feature_bed)
+        collated_feature_bed.to_csv(
+            os.path.join("temp", f"{sample.split('.')[0]}_{col}.bed"),
+            sep="\t",
+            index=None,
+        )
 
     df_residuals = pd.DataFrame(dict_residuals)
+    df_residuals.to_csv(os.path.join(args.out, f"{sample.split('.')[0]}_probas.csv"))
     df_residuals_sp = scipy.sparse.csr_matrix(df_residuals.values)
     scipy.sparse.save_npz(
         os.path.join(args.out, f"{sample.split('.')[0]}_probas.csv"),

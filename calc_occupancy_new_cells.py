@@ -36,6 +36,11 @@ plt.rcParams["xtick.color"] = COLOR
 plt.rcParams["ytick.color"] = COLOR
 
 
+def rev_compl_str(s):
+    s_ = "".join([rev_dict[l] for l in s])[::-1]
+    return s_
+
+
 def rev_compl_mut(mut_tuple):
     ini, mut = mut_tuple
     ini_ = "".join([rev_dict[l] for l in ini])[::-1]
@@ -66,7 +71,7 @@ def check_argv():
 args = check_argv()
 
 print(
-    f"Deriving probabilities of SBS occurence at {args.feature.split('.')[0]} regions"
+    f"Deriving probabilities of SBS occurence at {args.feature} regions"
 )
 
 if not os.path.exists(args.out):
@@ -175,77 +180,73 @@ for s in samples:
 sample_list_clean = []
 dict_sign_contrib = {}
 
-enh = pd.read_csv(args.feature, sep="\t", header=None)
-enh_ = enh
-
-n_enh = len(enh_[1])
-enh_["length"] = enh[2] - enh[1]
-
-feature_coords = {i: [x, y] for i, x, y in zip(enh_[3], enh_[1], enh_[2])}
-
-enh_["newstart"] = enh_[1]
-enh_["newend"] = enh_[2]
-enh_["id"] = [f"id{i}" for i in range(len(enh_))]
-enh_pad = enh[[0, "newstart", "newend", "id"]]
-enh_pad.to_csv("temp/feature_padded.bed", sep="\t", index=None, header=None)
-
-if args.local:
-    print("Calculating local enrichment")
-    newpad = 1 * int(enh_["length"].mean())
-    enh_cont1 = enh.copy(deep=True)
-    enh_cont2 = enh.copy(deep=True)
-    enh_cont1["newstart"] = [int(x) - newpad for x in enh_cont1[1]]
-    enh_cont1["newstart"] = enh_cont1["newstart"].clip(lower=0)
-    enh_cont1["newend"] = [int(x) for x in enh_cont1[1]]
-    enh_cont2["newstart"] = [int(x) for x in enh_cont2[2]]
-    enh_cont2["newend"] = [int(x) + newpad for x in enh_cont2[2]]
-    enh_cont1["id"] = [f"id{i}" for i in range(len(enh_cont1))]
-    enh_cont2["id"] = [f"id{i+len(enh_cont1)}" for i in range(len(enh_cont2))]
-    enh_pad_cont = pd.concat(
-        [
-            enh_cont1[[0, "newstart", "newend", "id"]],
-            enh_cont2[[0, "newstart", "newend", "id"]],
-        ]
-    )
-    enh_pad_cont.to_csv("temp/feature_context.bed", sep="\t", index=None, header=None)
-
-if args.glob:
-    print("Calculating global enrichment")
-    f = open(f"temp/feature_context.bed", "w")
-    subprocess.call(
-        [
-            f"{bedtools_exec}/subtractBed",
-            "-a",
-            f"data/{args.hgver}.bed",
-            "-b",
-            "temp/feature_padded.bed",
-        ],
-        stdout=f,
-    )
-
-
 df_tri_freq = pd.read_csv("data/trinucleotide_freq.csv", index_col=0, header=0)
 dict_tri_odds = dict(zip(df_tri_freq["trinucl"], df_tri_freq["odds"]))
 
-sbs_interest = [
-    "SBS4",
-    "SBS6",
-    "SBS12",
-    "SBS14",
-    "SBS15",
-    "SBS16",
-    "SBS19",
-    "SBS21",
-    "SBS22",
-    "SBS26",
-    "SBS29",
-    "SBS31",
-    "SBS35",
-    "SBS44",
-    "SBS53",
-]  #
-
 for sample in tqdm(samples_):
+
+    sample_ = sample.split('.')[0]
+    list_features = os.listdir(args.feature)
+    found_feature = False
+    for feature in list_features:
+        feature_ = feature.split('.')[0]
+        if feature_==sample_:
+            print("Processing", feature)
+            feature_filename = feature
+            found_feature = True
+            break
+
+    if not found_feature:
+        continue
+
+    enh = pd.read_csv(os.path.join(args.feature, feature_filename), sep="\t", header=None)
+    enh_ = enh
+
+    n_enh = len(enh_[1])
+    enh_["length"] = enh[2] - enh[1]
+
+    feature_coords = {i: [x, y] for i, x, y in zip(enh_[3], enh_[1], enh_[2])}
+
+    enh_["newstart"] = enh_[1]
+    enh_["newend"] = enh_[2]
+    enh_["id"] = [f"id{i}" for i in range(len(enh_))]
+    enh_pad = enh[[0, "newstart", "newend", "id"]]
+    enh_pad.to_csv("temp/feature_padded.bed", sep="\t", index=None, header=None)
+
+    if args.local:
+        print("Calculating local enrichment")
+        newpad = 1 * int(enh_["length"].mean())
+        enh_cont1 = enh.copy(deep=True)
+        enh_cont2 = enh.copy(deep=True)
+        enh_cont1["newstart"] = [int(x) - newpad for x in enh_cont1[1]]
+        enh_cont1["newstart"] = enh_cont1["newstart"].clip(lower=0)
+        enh_cont1["newend"] = [int(x) for x in enh_cont1[1]]
+        enh_cont2["newstart"] = [int(x) for x in enh_cont2[2]]
+        enh_cont2["newend"] = [int(x) + newpad for x in enh_cont2[2]]
+        enh_cont1["id"] = [f"id{i}" for i in range(len(enh_cont1))]
+        enh_cont2["id"] = [f"id{i+len(enh_cont1)}" for i in range(len(enh_cont2))]
+        enh_pad_cont = pd.concat(
+            [
+                enh_cont1[[0, "newstart", "newend", "id"]],
+                enh_cont2[[0, "newstart", "newend", "id"]],
+            ]
+        )
+        enh_pad_cont.to_csv("temp/feature_context.bed", sep="\t", index=None, header=None)
+
+    if args.glob:
+        print("Calculating global enrichment")
+        f = open(f"temp/feature_context.bed", "w")
+        subprocess.call(
+            [
+                f"{bedtools_exec}/subtractBed",
+                "-a",
+                f"data/{args.hgver}.bed",
+                "-b",
+                "temp/feature_padded.bed",
+            ],
+            stdout=f,
+        )
+
     dict_residuals = {}
     dict_residuals_cont = {}
     st = time.time()
@@ -264,31 +265,45 @@ for sample in tqdm(samples_):
     mut1["end"] = mut1[1]
 
     mut_numbers = []
+    mut_types = []
+    mut_contexts = []
     strands = []
 
-    mut1["context"] = [
-        seq_dict[c][s - 2 : s + 1].upper() for c, s in zip(mut1["chr"], mut1[1])
-    ]
-    mut1["type"] = [(c, c[0] + s + c[-1]) for c, s in zip(mut1["context"], mut1[4])]
+    for c, s, r in zip(mut1["chr"], mut1[1], mut1[3]):
+        if seq_dict[c][s - 1].upper() == r:
+            strands.append("+")
+        elif rev_dict[seq_dict[c][s - 1].upper()] == r:
+            strands.append("-")
+        else:
+            strands.append(np.nan)
 
+    mut1["strand"] = strands
+
+    for c, ss, st, r, a in zip(mut1["chr"], mut1["strand"], mut1[1], mut1[3], mut1[4]):
+        context = seq_dict[c][st - 2 : st + 1].upper()
+        ty = (context, context[0] + a + context[-1])
+        if ss == "-":
+            context = rev_compl_str(context)
+            ty = rev_compl_mut(ty)
+        mut_contexts.append(context)
+        mut_types.append(ty)
+
+    mut1["context"] = mut_contexts
+    mut1["type"] = mut_types
     mut_numbers = []
     strands = []
 
     for name in mut1["type"]:
         if name in dict_mut.keys():
             mut_numbers.append(dict_mut[name])
-            strands.append("+")
         elif rev_compl_mut(name) in dict_mut.keys():
             mut_numbers.append(dict_mut[rev_compl_mut(name)])
-            strands.append("-")
         else:
             mut_numbers.append(None)
-            strands.append("+")
 
     mut1["number"] = mut_numbers
-    mut1["strand"] = strands
 
-    mut2 = mut1[["chr", "start", "end", "number", "strand"]]
+    mut2 = mut1[["chr", "start", "end", "number", "strand"]].dropna()
     mut2.to_csv(
         os.path.join("temp", sample.split(".")[0] + ".bed"),
         sep="\t",

@@ -62,17 +62,15 @@ df_2 = {}
 
 for f in dirs:
     if "probas_cont.csv.npz" in f:
-        sample = f.split("_")[0]
-        sample_no = f.split("_")[1]
-        s = f"{sample}_{sample_no}"
+        sample = f.split(".")[0]
+        s = sample.split("_")[0]
         # cancer = f.split('_')[1]
         npz = scipy.sparse.load_npz(os.path.join(folder, f))
         mean_context = np.sum(npz.toarray(), axis=0)
 
         for f2 in dirs:
             sample1 = f2.split("_")[0]
-            sample1_no = f2.split("_")[1]
-            s1 = f"{sample1}_{sample1_no}"
+            s1 = sample1.split(".")[0]
             if "probas.csv.npz" in f2 and s1 == s:
                 npz2 = scipy.sparse.load_npz(os.path.join(folder, f2))
                 mean_feat = np.sum(npz2.toarray(), axis=0)
@@ -137,8 +135,8 @@ ax1.axvline(
     x=1, ymin=0, ymax=len(df_2.columns), lw=1.5, ls="--", color="red", zorder=-10
 )
 
-if ax1.get_xlim()[1] > 20:
-    ax1.set_xlim(ax1.get_xlim()[0], 20)
+if ax1.get_xlim()[1] > 50:
+    ax1.set_xlim(ax1.get_xlim()[0], 50)
 
 ax2 = sns.heatmap(
     df_plot,
